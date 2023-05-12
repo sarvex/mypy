@@ -121,6 +121,4 @@ def constant_fold_unary_float_op(op: str, value: float) -> float | None:
 
 
 def constant_fold_binary_str_op(op: str, left: str, right: str) -> str | None:
-    if op == "+":
-        return left + right
-    return None
+    return left + right if op == "+" else None

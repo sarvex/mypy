@@ -324,10 +324,7 @@ def parse_type_ignore_tag(tag: str | None) -> list[str] | None:
         # No tag -- ignore all errors.
         return []
     m = re.match(r"\s*\[([^]#]*)\]\s*(#.*)?$", tag)
-    if m is None:
-        # Invalid "# type: ignore" comment.
-        return None
-    return [code.strip() for code in m.group(1).split(",")]
+    return None if m is None else [code.strip() for code in m[1].split(",")]
 
 
 def parse_type_comment(
@@ -340,16 +337,14 @@ def parse_type_comment(
     try:
         typ = ast3_parse(type_comment, "<type_comment>", "eval")
     except SyntaxError:
-        if errors is not None:
-            stripped_type = type_comment.split("#", 2)[0].strip()
-            err_msg = f'{TYPE_COMMENT_SYNTAX_ERROR} "{stripped_type}"'
-            errors.report(line, column, err_msg, blocker=True, code=codes.SYNTAX)
-            return None, None
-        else:
+        if errors is None:
             raise
+        stripped_type = type_comment.split("#", 2)[0].strip()
+        err_msg = f'{TYPE_COMMENT_SYNTAX_ERROR} "{stripped_type}"'
+        errors.report(line, column, err_msg, blocker=True, code=codes.SYNTAX)
+        return None, None
     else:
-        extra_ignore = TYPE_IGNORE_PATTERN.match(type_comment)
-        if extra_ignore:
+        if extra_ignore := TYPE_IGNORE_PATTERN.match(type_comment):
             tag: str | None = extra_ignore.group(1)
             ignored: list[str] | None = parse_type_ignore_tag(tag)
             if ignored is None:
@@ -443,7 +438,7 @@ class ASTConverter:
         typeobj = type(node)
         visitor = self.visitor_cache.get(typeobj)
         if visitor is None:
-            method = "visit_" + node.__class__.__name__
+            method = f"visit_{node.__class__.__name__}"
             visitor = getattr(self, method)
             self.visitor_cache[typeobj] = visitor
         return visitor(node)
@@ -485,8 +480,7 @@ class ASTConverter:
             and self.type_ignores
             and min(self.type_ignores) < self.get_lineno(stmts[0])
         ):
-            ignores = self.type_ignores[min(self.type_ignores)]
-            if ignores:
+            if ignores := self.type_ignores[min(self.type_ignores)]:
                 joined_ignores = ", ".join(ignores)
                 self.fail(
                     (
@@ -516,12 +510,11 @@ class ASTConverter:
     ) -> ProperType | None:
         if type_comment is None:
             return None
-        else:
-            lineno = n.lineno
-            extra_ignore, typ = parse_type_comment(type_comment, lineno, n.col_offset, self.errors)
-            if extra_ignore is not None:
-                self.type_ignores[lineno] = extra_ignore
-            return typ
+        lineno = n.lineno
+        extra_ignore, typ = parse_type_comment(type_comment, lineno, n.col_offset, self.errors)
+        if extra_ignore is not None:
+            self.type_ignores[lineno] = extra_ignore
+        return typ
 
     op_map: Final[dict[type[AST], str]] = {
         ast3.Add: "+",
@@ -542,7 +535,7 @@ class ASTConverter:
     def from_operator(self, op: ast3.operator) -> str:
         op_name = ASTConverter.op_map.get(type(op))
         if op_name is None:
-            raise RuntimeError("Unknown operator " + str(type(op)))
+            raise RuntimeError(f"Unknown operator {str(type(op))}")
         else:
             return op_name
 
@@ -562,7 +555,7 @@ class ASTConverter:
     def from_comp_operator(self, op: ast3.cmpop) -> str:
         op_name = ASTConverter.comp_op_map.get(type(op))
         if op_name is None:
-            raise RuntimeError("Unknown comparison operator " + str(type(op)))
+            raise RuntimeError(f"Unknown comparison operator {str(type(op))}")
         else:
             return op_name
 
@@ -820,7 +813,7 @@ class ASTConverter:
         if not isinstance(stmt, IfStmt):
             return False
 
-        if not (len(stmt.body) == 1 and len(stmt.body[0].body) == 0):
+        if len(stmt.body) != 1 or len(stmt.body[0].body) != 0:
             # Body not empty
             return False
 
@@ -836,9 +829,7 @@ class ASTConverter:
 
     def translate_module_id(self, id: str) -> str:
         """Return the actual, internal module id for a source text id."""
-        if id == self.options.custom_typing_module:
-            return "typing"
-        return id
+        return "typing" if id == self.options.custom_typing_module else id
 
     def visit_Module(self, mod: ast3.Module) -> MypyFile:
         self.type_ignores = {}
@@ -1068,14 +1059,12 @@ class ASTConverter:
         no_type_check: bool,
         pos_only: bool = False,
     ) -> Argument:
-        if no_type_check:
-            arg_type = None
-        else:
+        arg_type = None
+        if not no_type_check:
             annotation = arg.annotation
             type_comment = arg.type_comment
             if annotation is not None and type_comment is not None:
                 self.fail(message_registry.DUPLICATE_TYPE_SIGNATURES, arg.lineno, arg.col_offset)
-            arg_type = None
             if annotation is not None:
                 arg_type = TypeConverter(self.errors, line=arg.lineno).visit(annotation)
             else:
@@ -1363,7 +1352,7 @@ class ASTConverter:
         elif isinstance(op_node, ast3.Or):
             op = "or"
         else:
-            raise RuntimeError("unknown BoolOp " + str(type(n)))
+            raise RuntimeError(f"unknown BoolOp {str(type(n))}")
 
         # potentially inefficient!
         return self.group(op, self.translate_expr_list(n.values), n)
@@ -1380,7 +1369,7 @@ class ASTConverter:
         op = self.from_operator(n.op)
 
         if op is None:
-            raise RuntimeError("cannot translate BinOp " + str(type(n.op)))
+            raise RuntimeError(f"cannot translate BinOp {str(type(n.op))}")
 
         e = OpExpr(op, self.visit(n.left), self.visit(n.right))
         return self.set_line(e, n)
@@ -1398,7 +1387,7 @@ class ASTConverter:
             op = "-"
 
         if op is None:
-            raise RuntimeError("cannot translate UnaryOp " + str(type(n.op)))
+            raise RuntimeError(f"cannot translate UnaryOp {str(type(n.op))}")
 
         e = UnaryExpr(op, self.visit(n.operand))
         return self.set_line(e, n)
@@ -1526,7 +1515,7 @@ class ASTConverter:
         elif val is Ellipsis:
             e = EllipsisExpr()
         else:
-            raise RuntimeError("Constant not implemented for " + str(type(val)))
+            raise RuntimeError(f"Constant not implemented for {str(type(val))}")
         return self.set_line(e, n)
 
     # Num(object n) -- a number as a PyObject.
@@ -1543,7 +1532,7 @@ class ASTConverter:
         elif isinstance(val, complex):
             e = ComplexExpr(val)
         else:
-            raise RuntimeError("num not implemented for " + str(type(val)))
+            raise RuntimeError(f"num not implemented for {str(type(val))}")
         return self.set_line(e, n)
 
     # Str(string s)
@@ -1575,7 +1564,11 @@ class ASTConverter:
         # to allow mypyc to support f-strings with format specifiers and conversions.
         val_exp = self.visit(n.value)
         val_exp.set_line(n.lineno, n.col_offset)
-        conv_str = "" if n.conversion is None or n.conversion < 0 else "!" + chr(n.conversion)
+        conv_str = (
+            ""
+            if n.conversion is None or n.conversion < 0
+            else f"!{chr(n.conversion)}"
+        )
         format_string = StrExpr("{" + conv_str + ":{}}")
         format_spec_exp = self.visit(n.format_spec) if n.format_spec is not None else StrExpr("")
         format_string.set_line(n.lineno, n.col_offset)
@@ -1714,11 +1707,7 @@ class ASTConverter:
         keys = [self.visit(k) for k in n.keys]
         values = [self.visit(v) for v in n.patterns]
 
-        if n.rest is None:
-            rest = None
-        else:
-            rest = NameExpr(n.rest)
-
+        rest = None if n.rest is None else NameExpr(n.rest)
         node = MappingPattern(keys, values, rest)
         return self.set_line(node, n)
 
@@ -1768,10 +1757,7 @@ class TypeConverter:
         Column numbers are sometimes incorrect in the AST and the column
         override can be used to work around that.
         """
-        if self.override_column < 0:
-            return column
-        else:
-            return self.override_column
+        return column if self.override_column < 0 else self.override_column
 
     def invalid_type(self, node: AST, note: str | None = None) -> RawExpressionType:
         """Constructs a type representing some expression that normally forms an invalid type.
@@ -1801,22 +1787,19 @@ class TypeConverter:
             return None
         self.node_stack.append(node)
         try:
-            method = "visit_" + node.__class__.__name__
+            method = f"visit_{node.__class__.__name__}"
             visitor = getattr(self, method, None)
-            if visitor is not None:
-                typ = visitor(node)
-                assert isinstance(typ, ProperType)
-                return typ
-            else:
+            if visitor is None:
                 return self.invalid_type(node)
+            typ = visitor(node)
+            assert isinstance(typ, ProperType)
+            return typ
         finally:
             self.node_stack.pop()
 
     def parent(self) -> AST | None:
         """Return the AST node above the one we are processing"""
-        if len(self.node_stack) < 2:
-            return None
-        return self.node_stack[-2]
+        return None if len(self.node_stack) < 2 else self.node_stack[-2]
 
     def fail(self, msg: str, line: int, column: int) -> None:
         if self.errors:
@@ -1859,9 +1842,7 @@ class TypeConverter:
             if k.arg == "name":
                 if name is not None:
                     self.fail(
-                        '"{}" gets multiple values for keyword argument "name"'.format(
-                            constructor
-                        ),
+                        f'"{constructor}" gets multiple values for keyword argument "name"',
                         f.lineno,
                         f.col_offset,
                     )
@@ -1869,9 +1850,7 @@ class TypeConverter:
             elif k.arg == "type":
                 if typ is not default_type:
                     self.fail(
-                        '"{}" gets multiple values for keyword argument "type"'.format(
-                            constructor
-                        ),
+                        f'"{constructor}" gets multiple values for keyword argument "type"',
                         f.lineno,
                         f.col_offset,
                     )
@@ -1950,10 +1929,13 @@ class TypeConverter:
         # We support specifically Literal[-4] and nothing else.
         # For example, Literal[+4] or Literal[~6] is not supported.
         typ = self.visit(n.operand)
-        if isinstance(typ, RawExpressionType) and isinstance(n.op, USub):
-            if isinstance(typ.literal_value, int):
-                typ.literal_value *= -1
-                return typ
+        if (
+            isinstance(typ, RawExpressionType)
+            and isinstance(n.op, USub)
+            and isinstance(typ.literal_value, int)
+        ):
+            typ.literal_value *= -1
+            return typ
         return self.invalid_type(n)
 
     def numeric_type(self, value: object, n: AST) -> Type:
